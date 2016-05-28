@@ -9,6 +9,7 @@ my class File {
     method new($file) { self.bless(:$file) }
     method e { nqp::stat($!file, nqp::const::STAT_EXISTS) == 1 }
     method s { nqp::stat($!file, nqp::const::STAT_FILESIZE) }
+    method inode { nqp::stat($!file, nqp::const::STAT_PLATFORM_INODE) }
     method IO { $!file.IO }
     method open(|c) { self.IO.open(|c) }
     method dirname { self.IO.dirname }
@@ -23,44 +24,43 @@ my class Impl {
     has $.io;
     has buf8 $.buf .= new;
     has $.tap;
+    has $.supplier = Supplier.new;
+    has $.bin;
+    has $.inode = -1;
 
     method reset() {
         $!size  = 0;
         $!io.close if $!io;
         $!io = Nil;
-        $!tap.close if $!tap;
-        $!tap = Nil;
     }
-    method Supply(Bool :$bin = False) {
-        my &handler = sub ($supplier, $event?) {
-            return if $event and $event.event ~~ FileRenamed;
-            return unless $!file.e;
-            my $current-size = $!file.s;
-            return if $!size == $current-size;
-            $!io //= try $!file.open(:r);
-            return unless $!io;
-            my $buf = $!io.read(2048);
-            $!size += $buf.elems;
-            $!buf ~= $buf;
-            my @i = (^$!buf.elems).grep({$!buf[$_] == 0x0a});
-            return unless @i;
-            for (-1, |@i) Z @i -> ($i, $j) {
-                my $line = $.buf.subbuf($i + 1, $j - $i);
-                my $out = $bin ?? $line !! $line.decode;
-                $supplier.emit($out);
-            }
-            $!buf = $!buf.subbuf(@i[*-1]);
+    method Supply() {
+        $!tap = $!dir.watch.tap: -> $event {
+            self!process if $event.path eq $!file;
         };
-
-        my $supplier = Supplier.new;
-        $!tap = $!file.watch.tap: -> $event { &handler($supplier, $event) };
-        $!dir.watch.tap: -> $event {
-            if $event.path eq $!file and $event.event ~~ FileRenamed and $!file.e {
-                self.reset;
-                $!tap = $!file.watch.tap: -> $event { &handler($supplier, $event) };
-            }
-        };
-        $supplier.Supply;
+        $!supplier.Supply;
+    }
+    method !process() {
+        return unless $!file.e;
+        my $current-inode = $!file.inode;
+        if $!inode != $current-inode {
+            self.reset;
+            $!inode = $current-inode;
+        }
+        my $current-size = $!file.s;
+        return if $!size == $current-size;
+        $!io //= try $!file.open(:r);
+        return unless $!io;
+        my $buf = $!io.read(2048);
+        $!size += $buf.elems;
+        $!buf ~= $buf;
+        my @i = (^$!buf.elems).grep({$!buf[$_] == 0x0a});
+        return unless @i;
+        for (-1, |@i) Z @i -> ($i, $j) {
+            my $line = $.buf.subbuf($i + 1, $j - $i);
+            my $out = $!bin ?? $line !! $line.decode;
+            $!supplier.emit($out);
+        }
+        $!buf = $!buf.subbuf(@i[*-1] + 1);
     }
 }
 
@@ -68,7 +68,7 @@ method new(|) { die "call watch() method instead" }
 
 method watch(::?CLASS:U: $filename, Bool :$bin = False) {
     my $file = File.new($filename.IO.abspath);
-    Impl.new(:$file).Supply(:$bin);
+    Impl.new(:$file, :$bin).Supply;
 }
 
 =begin pod
