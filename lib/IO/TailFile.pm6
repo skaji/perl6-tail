@@ -23,8 +23,6 @@ my class Impl {
     has $.size = 0;
     has $.io;
     has buf8 $.buf .= new;
-    has $.tap;
-    has $.supplier = Supplier.new;
     has $.bin;
     has $.inode = -1;
 
@@ -34,10 +32,11 @@ my class Impl {
         $!io = Nil;
     }
     method Supply() {
-        $!tap = $!dir.watch.tap: -> $event {
-            self!process if $event.path eq $!file;
+        supply {
+            whenever $!dir.watch -> $event {
+                self!process if $event.path eq $!file;
+            };
         };
-        $!supplier.Supply;
     }
     method !process() {
         return unless $!file.e;
@@ -58,7 +57,7 @@ my class Impl {
         for (-1, |@i) Z @i -> ($i, $j) {
             my $line = $.buf.subbuf($i + 1, $j - $i);
             my $out = $!bin ?? $line !! $line.decode;
-            $!supplier.emit($out);
+            emit($out);
         }
         $!buf = $!buf.subbuf(@i[*-1] + 1);
     }
