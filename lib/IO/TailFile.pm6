@@ -22,8 +22,7 @@ my class Impl {
     has IO::Path $.dir = $!file.dirname.IO;
     has $.size = 0;
     has $.io;
-    has buf8 $.buf .= new;
-    has $.bin;
+    has $.chomp;
     has $.inode = -1;
 
     method reset() {
@@ -32,11 +31,12 @@ my class Impl {
         $!io = Nil;
     }
     method Supply() {
-        supply {
+        my $supply = supply {
             whenever $!dir.watch -> $event {
                 self!process if $event.path eq $!file;
             };
         };
+        $supply.lines(:$!chomp);
     }
     method !process() {
         return unless $!file.e;
@@ -51,23 +51,15 @@ my class Impl {
         return unless $!io;
         my $buf = $!io.read(2048);
         $!size += $buf.elems;
-        $!buf ~= $buf;
-        my @i = (^$!buf.elems).grep({$!buf[$_] == 0x0a});
-        return unless @i;
-        for (-1, |@i) Z @i -> ($i, $j) {
-            my $line = $.buf.subbuf($i + 1, $j - $i);
-            my $out = $!bin ?? $line !! $line.decode;
-            emit($out);
-        }
-        $!buf = $!buf.subbuf(@i[*-1] + 1);
+        emit($buf.decode);
     }
 }
 
 method new(|) { die "call watch() method instead" }
 
-method watch(::?CLASS:U: $filename, Bool :$bin = False) {
+method watch(::?CLASS:U: $filename, Bool :$chomp = False) {
     my $file = File.new($filename.IO.abspath);
-    Impl.new(:$file, :$bin).Supply;
+    Impl.new(:$file, :$chomp).Supply;
 }
 
 =begin pod
@@ -80,10 +72,17 @@ IO::TailFile - emulation of tail -f
 
   use IO::TailFile;
 
+  # (a) reactive way
   react {
-    whenever IO::TailFile.watch("access.log") -> $line {
+    whenever IO::TailFile.watch("access.log", :chomp) -> $line {
       say $line;
     };
+  };
+
+  # (b) use lazy list
+  my @line = IO::TailFile.watch("access.log", :chomp).list.lazy;
+  for @line -> $line {
+    say $line;
   };
 
 =head1 DESCRIPTION
