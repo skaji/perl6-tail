@@ -10,10 +10,17 @@ SYNOPSIS
 
     use IO::TailFile;
 
+    # (a) reactive way
     react {
-      whenever IO::TailFile.watch("access.log") -> $line {
+      whenever IO::TailFile.watch("access.log", :chomp) -> $line {
         say $line;
       };
+    };
+
+    # (b) use lazy list
+    my @line = IO::TailFile.watch("access.log", :chomp).list.lazy;
+    for @line -> $line {
+      say $line;
     };
 
 DESCRIPTION
